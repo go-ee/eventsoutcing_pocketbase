@@ -1,4 +1,4 @@
-module eventsourcing_pocketbase
+module github.com/go-ee/eventsoutcing_pocketbase
 
 go 1.22.2
 
