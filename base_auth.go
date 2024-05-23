@@ -7,9 +7,9 @@ import (
 	"github.com/pocketbase/pocketbase/tools/types"
 )
 
-func NewCollectionBaseAuth(collectionName string, fieldKey string, users *Users, roles []string) *CollectionBaseAuth {
+func NewCollectionBaseAuth(collectionName string, fieldKey string, users *Users, roles []string, env Env) *CollectionBaseAuth {
 	return &CollectionBaseAuth{
-		CollectionBase: &CollectionBase{},
+		CollectionBase: &CollectionBase{Env: env},
 		AuthBuilder:    NewAuthorizationBuilder(collectionName+"_auth", fieldKey, roles),
 		Users:          users,
 	}
@@ -21,19 +21,19 @@ type CollectionBaseAuth struct {
 	AuthBuilder *AuthorizationBuilder
 }
 
-func (db *CollectionBaseAuth) CheckOrCreateCollection() (err error) {
-	if db.coll != nil && !db.RecreateDb {
+func (db *CollectionBaseAuth) CheckOrInit() (err error) {
+	if db.Coll != nil && !db.IsRecreateDb() {
 		return
 	}
 
-	if db.coll, err = db.Dao.FindCollectionByNameOrId(db.AuthBuilder.CollectionName); db.coll == nil || db.RecreateDb {
-		if db.coll != nil {
-			if err = db.Dao.DeleteCollection(db.coll); err != nil {
+	if db.Coll, err = db.Dao().FindCollectionByNameOrId(db.AuthBuilder.CollectionName); db.Coll == nil || db.IsRecreateDb() {
+		if db.Coll != nil {
+			if err = db.Dao().DeleteCollection(db.Coll); err != nil {
 				return
 			}
 		}
 
-		db.coll = &models.Collection{
+		db.Coll = &models.Collection{
 			Name: db.AuthBuilder.CollectionName,
 			Type: models.CollectionTypeBase,
 			Schema: schema.NewSchema(
@@ -59,18 +59,18 @@ func (db *CollectionBaseAuth) CheckOrCreateCollection() (err error) {
 		}
 
 		for _, role := range db.AuthBuilder.Roles {
-			db.coll.Schema.AddField(
+			db.Coll.Schema.AddField(
 				&schema.SchemaField{
 					Name: db.AuthBuilder.AuthFieldFor(role),
 					Type: schema.FieldTypeRelation,
 					Options: &schema.RelationOptions{
-						CollectionId:  db.Users.coll.Id,
+						CollectionId:  db.Users.Coll.Id,
 						CascadeDelete: false,
 					},
 				})
 		}
 
-		err = db.Dao.SaveCollection(db.coll)
+		err = db.Dao().SaveCollection(db.Coll)
 	}
 	return
 }

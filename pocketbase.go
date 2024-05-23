@@ -2,8 +2,8 @@ package espocketbase
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-	"github.com/hallgren/eventsourcing"
 	"github.com/hallgren/eventsourcing/core"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/daos"
@@ -27,12 +27,111 @@ const AggTypeFieldTimestamp = "timestamp"
 const AggTypeFieldData = "data"
 const AggTypeFieldMetadata = "metadata"
 
-func NewAggregateCollection(aggregateType string, users *Users) *AggregateCollection {
+func NewAggregateCollections(users *Users, env Env) *AggregateCollections {
+	return &AggregateCollections{
+		CollectionBase: &CollectionBase{Env: env},
+		auth: NewCollectionBaseAuth(AggTypesColName, "agg", users,
+			[]string{"admin", "maintainer", "user"}, env),
+		aggTypeCollections: map[string]*AggregateCollection{},
+		users:              users,
+	}
+}
+
+type AggregateCollections struct {
+	*CollectionBase
+	auth               *CollectionBaseAuth
+	aggTypeCollections map[string]*AggregateCollection
+	users              *Users
+}
+
+func (o *AggregateCollections) Get(
+	ctx context.Context, aggregateId string, aggregateType string, afterVersion core.Version) (ret core.Iterator, err error) {
+
+	var aggregateTypeCollection *AggregateCollection
+	if aggregateTypeCollection, err = o.CheckOrInit(aggregateType); err != nil {
+		return
+	}
+
+	ret, err = aggregateTypeCollection.Get(ctx, aggregateId, aggregateType, afterVersion)
+	return
+}
+
+// Save persists events to the collections for aggregate type
+func (o *AggregateCollections) Save(events []core.Event) (err error) {
+	// If no event return no error
+	if len(events) == 0 {
+		return
+	}
+
+	//aggregateID := events[0].AggregateID
+	aggregateType := events[0].AggregateType
+
+	var aggregateTypeCollection *AggregateCollection
+	if aggregateTypeCollection, err = o.CheckOrInit(aggregateType); err != nil {
+		return
+	}
+
+	err = aggregateTypeCollection.Save(events)
+	return
+}
+
+func (o *AggregateCollections) CheckOrInit(aggregateType string) (ret *AggregateCollection, err error) {
+	ret = o.aggTypeCollections[aggregateType]
+	if ret == nil {
+		ret = NewAggregateCollection(aggregateType, o.users, o.Env)
+	}
+	err = ret.CheckOrInit()
+	return
+}
+
+type CollectionBase struct {
+	Env
+	Coll *models.Collection
+}
+
+type Env interface {
+	Dao() *daos.Dao
+	IsRecreateDb() bool
+	IsAuthDisabled() bool
+}
+
+func buildAggregateTypeCollectionName(aggregationType string) (ret string) {
+	return fmt.Sprintf("%v%v", aggTypeColNamePrefix, ToSnakeCase(aggregationType))
+}
+
+func NewEvent(record *models.Record, aggregateType string) (ret *core.Event) {
+	ret = &core.Event{
+		AggregateID:   record.GetString(AggTypeFieldAggId),
+		Version:       core.Version(record.GetInt(AggTypeFieldVersion)),
+		GlobalVersion: core.Version(record.GetInt(AggTypeFieldGlobalVersion)),
+		AggregateType: aggregateType,
+		Reason:        record.GetString(AggTypeFieldReason),
+		Timestamp:     record.GetTime(AggTypeFieldTimestamp),
+		Data:          record.Get(AggTypeFieldData).(types.JsonRaw),
+		Metadata:      record.Get(AggTypeFieldMetadata).(types.JsonRaw),
+	}
+	return
+}
+
+func NewRecord(event *core.Event, coll *models.Collection) (ret *models.Record) {
+	ret = models.NewRecord(coll)
+
+	ret.Set(AggTypeFieldAggId, event.AggregateID)
+	ret.Set(AggTypeFieldVersion, event.Version)
+	ret.Set(AggTypeFieldGlobalVersion, event.GlobalVersion)
+	ret.Set(AggTypeFieldReason, event.Reason)
+	ret.Set(AggTypeFieldTimestamp, event.Timestamp)
+	ret.Set(AggTypeFieldData, event.Data)
+	ret.Set(AggTypeFieldMetadata, event.Metadata)
+	return
+}
+
+func NewAggregateCollection(aggregateType string, users *Users, env Env) *AggregateCollection {
 	collectionName := buildAggregateTypeCollectionName(aggregateType)
 	return &AggregateCollection{
-		CollectionBase: &CollectionBase{},
+		CollectionBase: &CollectionBase{Env: env},
 		auth: NewCollectionBaseAuth(collectionName, "key", users,
-			[]string{"admin", "maintainer", "user"}),
+			[]string{"admin", "maintainer", "user"}, env),
 		CollectionName: collectionName,
 		AggregateType:  aggregateType,
 	}
@@ -45,23 +144,23 @@ type AggregateCollection struct {
 	AggregateType  string
 }
 
-func (o *AggregateCollection) CheckOrCreateCollection() (err error) {
-	if err = o.auth.CheckOrCreateCollection(); err != nil {
+func (o *AggregateCollection) CheckOrInit() (err error) {
+	if err = o.auth.CheckOrInit(); err != nil {
 		return
 	}
 
-	if o.coll != nil && !o.RecreateDb {
+	if o.Coll != nil && !o.IsRecreateDb() {
 		return
 	}
 
-	if o.coll, err = o.Dao.FindCollectionByNameOrId(o.CollectionName); o.coll == nil || o.RecreateDb {
-		if o.coll != nil {
-			if err = o.Dao.DeleteCollection(o.coll); err != nil {
+	if o.Coll, err = o.Dao().FindCollectionByNameOrId(o.CollectionName); o.Coll == nil || o.IsAuthDisabled() {
+		if o.Coll != nil {
+			if err = o.Dao().DeleteCollection(o.Coll); err != nil {
 				return
 			}
 		}
 
-		o.coll = &models.Collection{
+		o.Coll = &models.Collection{
 			Name: o.CollectionName,
 			Type: models.CollectionTypeBase,
 			Schema: schema.NewSchema(
@@ -117,39 +216,41 @@ func (o *AggregateCollection) CheckOrCreateCollection() (err error) {
 			DeleteRule: types.Pointer(o.auth.AuthBuilder.DeleteRule()),
 		}
 
-		err = o.Dao.SaveCollection(o.coll)
+		err = o.Dao().SaveCollection(o.Coll)
 	}
 	return
 }
 
 func (o *AggregateCollection) Get(ctx context.Context,
-	aggregateId string, aggregateType string, afterVersion core.Version) (ret core.Iterator, err error) {
+	aggrId string, aggregateType string, afterVersion core.Version) (ret core.Iterator, err error) {
 
-	fmt.Printf("aggregateType: %v, aggregateID: %v", aggregateType, aggregateId)
+	fmt.Printf("aggregateType: %v, %v: %v", aggregateType, AggTypeFieldAggId, aggrId)
 	var records []*models.Record
-	records, err = o.Dao.FindRecordsByFilter(o.coll.Id,
-		"aggregate_id = {:aggregate_id} and version > {:version}", "version asc", 0, 0,
-		dbx.Params{"aggregate_id": aggregateId, "version": afterVersion},
+	records, err = o.Dao().FindRecordsByFilter(o.Coll.Id,
+		fmt.Sprintf("%v = {:%v} and %v > {:%v}", AggTypeFieldAggId, AggTypeFieldAggId,
+			AggTypeFieldVersion, AggTypeFieldVersion), AggTypeFieldVersion+" asc", 0, 0,
+		dbx.Params{AggTypeFieldAggId: aggrId, AggTypeFieldVersion: afterVersion},
 	)
 	ret = NewIterator(aggregateType, records)
 	return
 }
 
 // Save persists events to the collections for aggregate type
-func (o *AggregateCollection) Save(events []eventsourcing.Event) (err error) {
+func (o *AggregateCollection) Save(events []core.Event) (err error) {
 	// If no event return no error
 	if len(events) == 0 {
 		return
 	}
 
-	err = o.Dao.RunInTransaction(func(txDao *daos.Dao) (txErr error) {
-		aggregateID := events[0].AggregateID()
-		aggregateType := events[0].AggregateType()
-		fmt.Printf("aggregateType: %v, aggregateID: %v", aggregateType, aggregateID)
+	err = o.Dao().RunInTransaction(func(txDao *daos.Dao) (txErr error) {
+		aggrId := events[0].AggregateID
+		aggregateType := events[0].AggregateType
+		fmt.Printf("aggregateType: %v, %v: %v", aggregateType, AggTypeFieldAggId, aggrId)
 		var record *models.Record
-		if record, txErr = txDao.FindFirstRecordByFilter(o.coll.Id, "aggregate_id = {:aggregate_id}",
-			dbx.Params{"aggregate_id": aggregateID},
-		); txErr != nil {
+		if record, txErr = txDao.FindFirstRecordByFilter(o.Coll.Id,
+			fmt.Sprintf("%v = {:%v}", AggTypeFieldAggId, AggTypeFieldAggId),
+			dbx.Params{AggTypeFieldAggId: aggrId},
+		); txErr != nil && txErr != sql.ErrNoRows {
 			return
 		}
 
@@ -161,14 +262,14 @@ func (o *AggregateCollection) Save(events []eventsourcing.Event) (err error) {
 		}
 
 		// Make sure no other has saved event to the same aggregate concurrently
-		firstEventVersion := events[0].Version()
+		firstEventVersion := events[0].Version
 		if currentVersion+1 != core.Version(firstEventVersion) {
 			txErr = core.ErrConcurrency
 			return
 		}
 
 		for _, event := range events {
-			record = NewRecord(&event, o.coll)
+			record = NewRecord(&event, o.Coll)
 
 			if txErr = txDao.Save(record); txErr != nil {
 				return
@@ -176,108 +277,5 @@ func (o *AggregateCollection) Save(events []eventsourcing.Event) (err error) {
 		}
 		return
 	})
-	return
-}
-
-func NewAggregateCollections(users *Users) *AggregateCollections {
-	return &AggregateCollections{
-		CollectionBase: &CollectionBase{},
-		auth: NewCollectionBaseAuth(AggTypesColName, "agg", users,
-			[]string{"admin", "maintainer", "user"}),
-	}
-}
-
-type AggregateCollections struct {
-	*CollectionBase
-	auth               *CollectionBaseAuth
-	aggTypeCollections map[string]*AggregateCollection
-	users              *Users
-}
-
-func (o *AggregateCollections) Get(
-	ctx context.Context, aggregateId string, aggregateType string, afterVersion core.Version) (ret core.Iterator, err error) {
-
-	var aggregateTypeCollection *AggregateCollection
-	if aggregateTypeCollection, err = o.CheckOrCreateCollection(aggregateType); err != nil {
-		return
-	}
-
-	ret, err = aggregateTypeCollection.Get(ctx, aggregateId, aggregateType, afterVersion)
-	return
-}
-
-// Save persists events to the collections for aggregate type
-func (o *AggregateCollections) Save(events []eventsourcing.Event) (err error) {
-	// If no event return no error
-	if len(events) == 0 {
-		return
-	}
-
-	//aggregateID := events[0].AggregateID
-	aggregateType := events[0].AggregateType()
-
-	var aggregateTypeCollection *AggregateCollection
-	if aggregateTypeCollection, err = o.CheckOrCreateCollection(aggregateType); err != nil {
-		return
-	}
-
-	err = aggregateTypeCollection.Save(events)
-	return
-}
-
-func (o *AggregateCollections) CheckOrCreateCollection(aggregateType string) (ret *AggregateCollection, err error) {
-	ret = o.aggTypeCollections[aggregateType]
-	if ret == nil {
-		ret = NewAggregateCollection(aggregateType, o.users)
-	}
-	err = ret.CheckOrCreateCollection()
-	return
-}
-
-type Collection interface {
-	SetDaoAndRecreateDb(dao *daos.Dao, recreateDb bool)
-	CheckOrCreateCollection() error
-}
-
-type CollectionBase struct {
-	Dao        *daos.Dao
-	RecreateDb bool
-
-	coll *models.Collection
-}
-
-func (db *CollectionBase) SetDaoAndRecreateDb(dao *daos.Dao, recreateDb bool) {
-	db.Dao = dao
-	db.RecreateDb = recreateDb
-}
-
-func buildAggregateTypeCollectionName(aggregationType string) (ret string) {
-	return fmt.Sprintf("%v%v", aggTypeColNamePrefix, aggregationType)
-}
-
-func NewEvent(record *models.Record, aggregateType string) (ret *core.Event) {
-	ret = &core.Event{
-		AggregateID:   record.GetString(AggTypeFieldAggId),
-		Version:       core.Version(record.GetInt(AggTypeFieldVersion)),
-		GlobalVersion: core.Version(record.GetInt(AggTypeFieldGlobalVersion)),
-		AggregateType: aggregateType,
-		Reason:        record.GetString(AggTypeFieldReason),
-		Timestamp:     record.GetTime(AggTypeFieldTimestamp),
-		Data:          record.Get(AggTypeFieldData).(types.JsonRaw),
-		Metadata:      record.Get(AggTypeFieldMetadata).(types.JsonRaw),
-	}
-	return
-}
-
-func NewRecord(event *eventsourcing.Event, coll *models.Collection) (ret *models.Record) {
-	ret = models.NewRecord(coll)
-
-	ret.Set(AggTypeFieldAggId, event.AggregateID)
-	ret.Set(AggTypeFieldVersion, event.Version)
-	ret.Set(AggTypeFieldGlobalVersion, event.GlobalVersion)
-	ret.Set(AggTypeFieldReason, event.Reason)
-	ret.Set(AggTypeFieldTimestamp, event.Timestamp)
-	ret.Set(AggTypeFieldData, event.Data)
-	ret.Set(AggTypeFieldMetadata, event.Metadata)
 	return
 }

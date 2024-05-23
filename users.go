@@ -10,9 +10,9 @@ const UsersFieldName = "name"
 const UsersFieldEmail = "email"
 const UsersFieldAvatar = "avatar"
 
-func NewUsersDb() *Users {
+func NewUsersDb(env Env) *Users {
 	return &Users{
-		CollectionBase: &CollectionBase{},
+		CollectionBase: &CollectionBase{Env: env},
 	}
 }
 
@@ -20,18 +20,18 @@ type Users struct {
 	*CollectionBase
 }
 
-func (db *Users) CheckOrCreateCollection() (err error) {
-	if db.coll == nil {
-		if db.coll, err = db.Dao.FindCollectionByNameOrId(UsersCollName); err != nil {
+func (db *Users) CheckOrInit() (err error) {
+	if db.Coll == nil {
+		if db.Coll, err = db.Dao().FindCollectionByNameOrId(UsersCollName); err != nil {
 			return
 		}
 	}
-	if _, ok := db.coll.Schema.AsMap()[FieldAdmin]; !ok {
-		db.coll.Schema.AddField(&schema.SchemaField{
+	if _, ok := db.Coll.Schema.AsMap()[FieldAdmin]; !ok {
+		db.Coll.Schema.AddField(&schema.SchemaField{
 			Name: FieldAdmin,
 			Type: schema.FieldTypeBool,
 		})
-		err = db.Dao.SaveCollection(db.coll)
+		err = db.Dao().SaveCollection(db.Coll)
 	}
 	return
 }
