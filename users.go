@@ -20,12 +20,14 @@ type Users struct {
 	*CollectionBase
 }
 
-func (db *Users) CheckOrInit() (err error) {
-	if db.Coll == nil {
-		if db.Coll, err = db.Dao().FindCollectionByNameOrId(UsersCollName); err != nil {
-			return
-		}
+func (db *Users) CheckOrInit() (ret bool, err error) {
+	if ret, err = db.CollectionBase.CheckOrInit(); ret || err != nil {
+		return
 	}
+	if db.Coll, err = db.Dao().FindCollectionByNameOrId(UsersCollName); err != nil {
+		return
+	}
+
 	if _, ok := db.Coll.Schema.AsMap()[FieldAdmin]; !ok {
 		db.Coll.Schema.AddField(&schema.SchemaField{
 			Name: FieldAdmin,

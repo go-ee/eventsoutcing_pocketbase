@@ -12,14 +12,9 @@ import (
 	"github.com/pocketbase/pocketbase/tools/types"
 )
 
-const AggTypesColName = "agg_types"
-const AggTypesFieldAggId = "agg_type"
-const AggTypesFieldAggType = "agg_id"
-
-const aggTypeColNamePrefix = "es_"
+const aggTypeColNamePrefix = "agg_"
 
 const AggTypeFieldAggId = "agg_id"
-const AggTypeFieldSeq = "seq"
 const AggTypeFieldVersion = "version"
 const AggTypeFieldGlobalVersion = "global_version"
 const AggTypeFieldReason = "reason"
@@ -27,28 +22,28 @@ const AggTypeFieldTimestamp = "timestamp"
 const AggTypeFieldData = "data"
 const AggTypeFieldMetadata = "metadata"
 
-func NewAggregateCollections(users *Users, env Env) *AggregateCollections {
+func NewAggregateCollections(users *Users, authRoles []string, env Env) *AggregateCollections {
 	return &AggregateCollections{
 		CollectionBase: &CollectionBase{Env: env},
-		auth: NewCollectionBaseAuth(AggTypesColName, "agg", users,
-			[]string{"admin", "maintainer", "user"}, env),
+		Users:          users,
+		AuthRoles:      authRoles,
+
 		aggTypeCollections: map[string]*AggregateCollection{},
-		users:              users,
 	}
 }
 
 type AggregateCollections struct {
 	*CollectionBase
-	auth               *CollectionBaseAuth
 	aggTypeCollections map[string]*AggregateCollection
-	users              *Users
+	Users              *Users
+	AuthRoles          []string
 }
 
 func (o *AggregateCollections) Get(
 	ctx context.Context, aggregateId string, aggregateType string, afterVersion core.Version) (ret core.Iterator, err error) {
 
 	var aggregateTypeCollection *AggregateCollection
-	if aggregateTypeCollection, err = o.CheckOrInit(aggregateType); err != nil {
+	if aggregateTypeCollection, err = o.GetOrCreateForAggregationType(aggregateType); err != nil {
 		return
 	}
 
@@ -67,7 +62,7 @@ func (o *AggregateCollections) Save(events []core.Event) (err error) {
 	aggregateType := events[0].AggregateType
 
 	var aggregateTypeCollection *AggregateCollection
-	if aggregateTypeCollection, err = o.CheckOrInit(aggregateType); err != nil {
+	if aggregateTypeCollection, err = o.GetOrCreateForAggregationType(aggregateType); err != nil {
 		return
 	}
 
@@ -75,18 +70,28 @@ func (o *AggregateCollections) Save(events []core.Event) (err error) {
 	return
 }
 
-func (o *AggregateCollections) CheckOrInit(aggregateType string) (ret *AggregateCollection, err error) {
+func (o *AggregateCollections) GetOrCreateForAggregationType(aggregateType string) (ret *AggregateCollection, err error) {
 	ret = o.aggTypeCollections[aggregateType]
 	if ret == nil {
-		ret = NewAggregateCollection(aggregateType, o.users, o.Env)
+		ret = NewAggregateCollection(aggregateType, o.Users, o.AuthRoles, o.Env)
+		o.aggTypeCollections[aggregateType] = ret
 	}
-	err = ret.CheckOrInit()
+	_, err = ret.CheckOrInit()
 	return
 }
 
 type CollectionBase struct {
 	Env
 	Coll *models.Collection
+}
+
+func (db *CollectionBase) CheckOrInit() (ret bool, err error) {
+	ret = db.Coll != nil
+	return
+}
+
+type Collection interface {
+	CheckOrInit() (bool, error)
 }
 
 type Env interface {
@@ -117,8 +122,8 @@ func NewRecord(event *core.Event, coll *models.Collection) (ret *models.Record) 
 	ret = models.NewRecord(coll)
 
 	ret.Set(AggTypeFieldAggId, event.AggregateID)
-	ret.Set(AggTypeFieldVersion, event.Version)
-	ret.Set(AggTypeFieldGlobalVersion, event.GlobalVersion)
+	ret.Set(AggTypeFieldVersion, uint64(event.Version))
+	ret.Set(AggTypeFieldGlobalVersion, uint64(event.GlobalVersion))
 	ret.Set(AggTypeFieldReason, event.Reason)
 	ret.Set(AggTypeFieldTimestamp, event.Timestamp)
 	ret.Set(AggTypeFieldData, event.Data)
@@ -126,12 +131,11 @@ func NewRecord(event *core.Event, coll *models.Collection) (ret *models.Record) 
 	return
 }
 
-func NewAggregateCollection(aggregateType string, users *Users, env Env) *AggregateCollection {
+func NewAggregateCollection(aggregateType string, users *Users, authRoles []string, env Env) *AggregateCollection {
 	collectionName := buildAggregateTypeCollectionName(aggregateType)
 	return &AggregateCollection{
 		CollectionBase: &CollectionBase{Env: env},
-		auth: NewCollectionBaseAuth(collectionName, "key", users,
-			[]string{"admin", "maintainer", "user"}, env),
+		auth:           NewCollectionBaseAuth(collectionName, AggTypeFieldAggId, users, authRoles, env),
 		CollectionName: collectionName,
 		AggregateType:  aggregateType,
 	}
@@ -144,16 +148,16 @@ type AggregateCollection struct {
 	AggregateType  string
 }
 
-func (o *AggregateCollection) CheckOrInit() (err error) {
-	if err = o.auth.CheckOrInit(); err != nil {
+func (o *AggregateCollection) CheckOrInit() (ret bool, err error) {
+	if ret, err = o.auth.CheckOrInit(); err != nil {
 		return
 	}
 
-	if o.Coll != nil && !o.IsRecreateDb() {
+	if ret, err = o.CollectionBase.CheckOrInit(); ret || err != nil {
 		return
 	}
 
-	if o.Coll, err = o.Dao().FindCollectionByNameOrId(o.CollectionName); o.Coll == nil || o.IsAuthDisabled() {
+	if o.Coll, err = o.Dao().FindCollectionByNameOrId(o.CollectionName); o.Coll == nil || o.IsRecreateDb() {
 		if o.Coll != nil {
 			if err = o.Dao().DeleteCollection(o.Coll); err != nil {
 				return
@@ -166,12 +170,7 @@ func (o *AggregateCollection) CheckOrInit() (err error) {
 			Schema: schema.NewSchema(
 				&schema.SchemaField{
 					Name:     AggTypeFieldAggId,
-					Type:     schema.FieldTypeNumber,
-					Required: true,
-				},
-				&schema.SchemaField{
-					Name:     AggTypeFieldSeq,
-					Type:     schema.FieldTypeNumber,
+					Type:     schema.FieldTypeText,
 					Required: true,
 				},
 				&schema.SchemaField{
@@ -209,6 +208,9 @@ func (o *AggregateCollection) CheckOrInit() (err error) {
 					},
 				},
 			),
+			Indexes: types.JsonArray[string]{
+				fmt.Sprintf("CREATE INDEX idx_%v ON %v (%v)", AggTypeFieldAggId, o.CollectionName, AggTypeFieldAggId),
+			},
 			ListRule:   types.Pointer(o.auth.AuthBuilder.ListRule()),
 			ViewRule:   types.Pointer(o.auth.AuthBuilder.ViewRule()),
 			CreateRule: types.Pointer(o.auth.AuthBuilder.CreateRule()),
@@ -226,11 +228,14 @@ func (o *AggregateCollection) Get(ctx context.Context,
 
 	fmt.Printf("aggregateType: %v, %v: %v", aggregateType, AggTypeFieldAggId, aggrId)
 	var records []*models.Record
-	records, err = o.Dao().FindRecordsByFilter(o.Coll.Id,
+	if records, err = o.Dao().FindRecordsByFilter(o.Coll.Id,
 		fmt.Sprintf("%v = {:%v} and %v > {:%v}", AggTypeFieldAggId, AggTypeFieldAggId,
 			AggTypeFieldVersion, AggTypeFieldVersion), AggTypeFieldVersion+" asc", 0, 0,
 		dbx.Params{AggTypeFieldAggId: aggrId, AggTypeFieldVersion: afterVersion},
-	)
+	); err != nil {
+		//TODO maybe we need to ignore );sql.ErrNoRows {
+		return
+	}
 	ret = NewIterator(aggregateType, records)
 	return
 }

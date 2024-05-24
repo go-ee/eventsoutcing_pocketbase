@@ -21,8 +21,8 @@ type CollectionBaseAuth struct {
 	AuthBuilder *AuthorizationBuilder
 }
 
-func (db *CollectionBaseAuth) CheckOrInit() (err error) {
-	if db.Coll != nil && !db.IsRecreateDb() {
+func (db *CollectionBaseAuth) CheckOrInit() (ret bool, err error) {
+	if ret, err = db.CollectionBase.CheckOrInit(); ret {
 		return
 	}
 
