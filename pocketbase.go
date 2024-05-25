@@ -12,8 +12,6 @@ import (
 	"github.com/pocketbase/pocketbase/tools/types"
 )
 
-const aggTypeColNamePrefix = "agg_"
-
 const AggTypeFieldAggId = "agg_id"
 const AggTypeFieldVersion = "version"
 const AggTypeFieldGlobalVersion = "global_version"
@@ -101,7 +99,7 @@ type Env interface {
 }
 
 func buildAggregateTypeCollectionName(aggregationType string) (ret string) {
-	return fmt.Sprintf("%v%v", aggTypeColNamePrefix, ToSnakeCase(aggregationType))
+	return ToSnakeCase(aggregationType)
 }
 
 func NewEvent(record *models.Record, aggregateType string) (ret *core.Event) {
