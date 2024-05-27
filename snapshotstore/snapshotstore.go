@@ -70,7 +70,7 @@ func (o *AggregateCollections) GetOrCreateForAggregationType(aggregateType strin
 }
 
 func buildAggregateTypeCollectionName(aggregationType string) (ret string) {
-	return fmt.Sprintf("%v_snapshot", es.ToSnakeCase(aggregationType))
+	return fmt.Sprintf("%v_snap", es.ToSnakeCase(aggregationType))
 }
 
 func NewSnapshot(record *models.Record, aggregateType string) (ret *core.Snapshot) {
