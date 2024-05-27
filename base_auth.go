@@ -7,7 +7,9 @@ import (
 	"github.com/pocketbase/pocketbase/tools/types"
 )
 
-func NewCollectionBaseAuth(collectionName string, fieldKey string, users *Users, roles []string, env Env) *CollectionBaseAuth {
+func NewCollectionBaseAuth(
+	collectionName string, fieldKey string, users *Users, roles []string, env Env) *CollectionBaseAuth {
+
 	return &CollectionBaseAuth{
 		CollectionBase: &CollectionBase{Env: env},
 		AuthBuilder:    NewAuthorizationBuilder(collectionName+"_auth", fieldKey, roles),

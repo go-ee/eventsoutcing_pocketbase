@@ -1,4 +1,4 @@
-package espocketbase
+package eventstore
 
 import (
 	"github.com/hallgren/eventsourcing/core"

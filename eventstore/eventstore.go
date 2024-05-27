@@ -1,9 +1,11 @@
-package espocketbase
+package eventstore
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	es "github.com/go-ee/eventsoutcing_pocketbase"
 	"github.com/hallgren/eventsourcing/core"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/daos"
@@ -20,9 +22,9 @@ const AggTypeFieldTimestamp = "timestamp"
 const AggTypeFieldData = "data"
 const AggTypeFieldMetadata = "metadata"
 
-func NewAggregateCollections(users *Users, authRoles []string, env Env) *AggregateCollections {
+func NewAggregateCollections(users *es.Users, authRoles []string, env es.Env) *AggregateCollections {
 	return &AggregateCollections{
-		CollectionBase: &CollectionBase{Env: env},
+		CollectionBase: &es.CollectionBase{Env: env},
 		Users:          users,
 		AuthRoles:      authRoles,
 
@@ -31,9 +33,9 @@ func NewAggregateCollections(users *Users, authRoles []string, env Env) *Aggrega
 }
 
 type AggregateCollections struct {
-	*CollectionBase
+	*es.CollectionBase
 	aggTypeCollections map[string]*AggregateCollection
-	Users              *Users
+	Users              *es.Users
 	AuthRoles          []string
 }
 
@@ -78,28 +80,8 @@ func (o *AggregateCollections) GetOrCreateForAggregationType(aggregateType strin
 	return
 }
 
-type CollectionBase struct {
-	Env
-	Coll *models.Collection
-}
-
-func (db *CollectionBase) CheckOrInit() (ret bool, err error) {
-	ret = db.Coll != nil
-	return
-}
-
-type Collection interface {
-	CheckOrInit() (bool, error)
-}
-
-type Env interface {
-	Dao() *daos.Dao
-	IsRecreateDb() bool
-	IsAuthDisabled() bool
-}
-
 func buildAggregateTypeCollectionName(aggregationType string) (ret string) {
-	return ToSnakeCase(aggregationType)
+	return es.ToSnakeCase(aggregationType)
 }
 
 func NewEvent(record *models.Record, aggregateType string) (ret *core.Event) {
@@ -129,19 +111,19 @@ func NewRecord(event *core.Event, coll *models.Collection) (ret *models.Record) 
 	return
 }
 
-func NewAggregateCollection(aggregateType string, users *Users, authRoles []string, env Env) *AggregateCollection {
+func NewAggregateCollection(aggregateType string, users *es.Users, authRoles []string, env es.Env) *AggregateCollection {
 	collectionName := buildAggregateTypeCollectionName(aggregateType)
 	return &AggregateCollection{
-		CollectionBase: &CollectionBase{Env: env},
-		auth:           NewCollectionBaseAuth(collectionName, AggTypeFieldAggId, users, authRoles, env),
+		CollectionBase: &es.CollectionBase{Env: env},
+		auth:           es.NewCollectionBaseAuth(collectionName, AggTypeFieldAggId, users, authRoles, env),
 		CollectionName: collectionName,
 		AggregateType:  aggregateType,
 	}
 }
 
 type AggregateCollection struct {
-	*CollectionBase
-	auth           *CollectionBaseAuth
+	*es.CollectionBase
+	auth           *es.CollectionBaseAuth
 	CollectionName string
 	AggregateType  string
 }
@@ -221,15 +203,15 @@ func (o *AggregateCollection) CheckOrInit() (ret bool, err error) {
 	return
 }
 
-func (o *AggregateCollection) Get(ctx context.Context,
-	aggrId string, aggregateType string, afterVersion core.Version) (ret core.Iterator, err error) {
+func (o *AggregateCollection) Get(_ context.Context,
+	aggId string, aggregateType string, afterVersion core.Version) (ret core.Iterator, err error) {
 
-	fmt.Printf("aggregateType: %v, %v: %v", aggregateType, AggTypeFieldAggId, aggrId)
+	fmt.Printf("aggregateType: %v, %v: %v", aggregateType, AggTypeFieldAggId, aggId)
 	var records []*models.Record
 	if records, err = o.Dao().FindRecordsByFilter(o.Coll.Id,
 		fmt.Sprintf("%v = {:%v} and %v > {:%v}", AggTypeFieldAggId, AggTypeFieldAggId,
 			AggTypeFieldVersion, AggTypeFieldVersion), AggTypeFieldVersion+" asc", 0, 0,
-		dbx.Params{AggTypeFieldAggId: aggrId, AggTypeFieldVersion: afterVersion},
+		dbx.Params{AggTypeFieldAggId: aggId, AggTypeFieldVersion: afterVersion},
 	); err != nil {
 		//TODO maybe we need to ignore );sql.ErrNoRows {
 		return
@@ -246,14 +228,14 @@ func (o *AggregateCollection) Save(events []core.Event) (err error) {
 	}
 
 	err = o.Dao().RunInTransaction(func(txDao *daos.Dao) (txErr error) {
-		aggrId := events[0].AggregateID
+		aggId := events[0].AggregateID
 		aggregateType := events[0].AggregateType
-		fmt.Printf("aggregateType: %v, %v: %v", aggregateType, AggTypeFieldAggId, aggrId)
+		fmt.Printf("aggregateType: %v, %v: %v", aggregateType, AggTypeFieldAggId, aggId)
 		var record *models.Record
 		if record, txErr = txDao.FindFirstRecordByFilter(o.Coll.Id,
 			fmt.Sprintf("%v = {:%v}", AggTypeFieldAggId, AggTypeFieldAggId),
-			dbx.Params{AggTypeFieldAggId: aggrId},
-		); txErr != nil && txErr != sql.ErrNoRows {
+			dbx.Params{AggTypeFieldAggId: aggId},
+		); txErr != nil && !errors.Is(txErr, sql.ErrNoRows) {
 			return
 		}
 
@@ -266,7 +248,7 @@ func (o *AggregateCollection) Save(events []core.Event) (err error) {
 
 		// Make sure no other has saved event to the same aggregate concurrently
 		firstEventVersion := events[0].Version
-		if currentVersion+1 != core.Version(firstEventVersion) {
+		if currentVersion+1 != firstEventVersion {
 			txErr = core.ErrConcurrency
 			return
 		}
