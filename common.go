@@ -5,12 +5,12 @@ import (
 	"github.com/pocketbase/pocketbase/models"
 )
 
-type CollectionBase struct {
+type ColBase struct {
 	Env
 	Coll *models.Collection
 }
 
-func (db *CollectionBase) CheckOrInit() (ret bool, err error) {
+func (db *ColBase) CheckOrInit() (ret bool, err error) {
 	ret = db.Coll != nil
 	return
 }

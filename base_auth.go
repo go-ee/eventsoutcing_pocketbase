@@ -8,23 +8,23 @@ import (
 )
 
 func NewCollectionBaseAuth(
-	collectionName string, fieldKey string, users *Users, roles []string, env Env) *CollectionBaseAuth {
+	collectionName string, fieldKey string, users *Users, roles []string, env Env) *ColBaseAuth {
 
-	return &CollectionBaseAuth{
-		CollectionBase: &CollectionBase{Env: env},
-		AuthBuilder:    NewAuthorizationBuilder(collectionName+"_auth", fieldKey, roles),
-		Users:          users,
+	return &ColBaseAuth{
+		ColBase:     &ColBase{Env: env},
+		AuthBuilder: NewAuthorizationBuilder(collectionName+"_auth", fieldKey, roles),
+		Users:       users,
 	}
 }
 
-type CollectionBaseAuth struct {
-	*CollectionBase
+type ColBaseAuth struct {
+	*ColBase
 	Users       *Users
 	AuthBuilder *AuthorizationBuilder
 }
 
-func (db *CollectionBaseAuth) CheckOrInit() (ret bool, err error) {
-	if ret, err = db.CollectionBase.CheckOrInit(); ret {
+func (db *ColBaseAuth) CheckOrInit() (ret bool, err error) {
+	if ret, err = db.ColBase.CheckOrInit(); ret {
 		return
 	}
 

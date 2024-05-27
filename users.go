@@ -12,16 +12,16 @@ const UsersFieldAvatar = "avatar"
 
 func NewUsersDb(env Env) *Users {
 	return &Users{
-		CollectionBase: &CollectionBase{Env: env},
+		ColBase: &ColBase{Env: env},
 	}
 }
 
 type Users struct {
-	*CollectionBase
+	*ColBase
 }
 
 func (db *Users) CheckOrInit() (ret bool, err error) {
-	if ret, err = db.CollectionBase.CheckOrInit(); ret || err != nil {
+	if ret, err = db.ColBase.CheckOrInit(); ret || err != nil {
 		return
 	}
 	if db.Coll, err = db.Dao().FindCollectionByNameOrId(UsersCollName); err != nil {
