@@ -22,11 +22,11 @@ const AggTypeFieldTimestamp = "timestamp"
 const AggTypeFieldData = "data"
 const AggTypeFieldMetadata = "metadata"
 
-func New(users *es.Users, authRoles []string, env es.Env) *StoreCollections {
+func New(usersColId string, authRoles []string, env es.Env) *StoreCollections {
 	return &StoreCollections{
-		ColBase:   &es.ColBase{Env: env},
-		Users:     users,
-		AuthRoles: authRoles,
+		ColBase:    &es.ColBase{Env: env},
+		UsersColId: usersColId,
+		AuthRoles:  authRoles,
 
 		aggTypeCols: map[string]*AggCol{},
 	}
@@ -34,8 +34,8 @@ func New(users *es.Users, authRoles []string, env es.Env) *StoreCollections {
 
 type StoreCollections struct {
 	*es.ColBase
-	Users     *es.Users
-	AuthRoles []string
+	UsersColId string
+	AuthRoles  []string
 
 	aggTypeCols map[string]*AggCol
 }
@@ -74,7 +74,7 @@ func (o *StoreCollections) Save(events []core.Event) (err error) {
 func (o *StoreCollections) GetOrCreateForAggType(aggType string) (ret *AggCol, err error) {
 	ret = o.aggTypeCols[aggType]
 	if ret == nil {
-		ret = NewAggCol(aggType, o.Users, o.AuthRoles, o.Env)
+		ret = NewAggCol(aggType, o.UsersColId, o.AuthRoles, o.Env)
 		o.aggTypeCols[aggType] = ret
 	}
 	_, err = ret.CheckOrInit()
@@ -112,11 +112,11 @@ func NewRecord(event *core.Event, coll *models.Collection) (ret *models.Record) 
 	return
 }
 
-func NewAggCol(aggType string, users *es.Users, authRoles []string, env es.Env) *AggCol {
+func NewAggCol(aggType string, usersColId string, authRoles []string, env es.Env) *AggCol {
 	colName := buildAggTypeColName(aggType)
 	return &AggCol{
 		ColBase:       &es.ColBase{Env: env},
-		Auth:          es.NewCollectionBaseAuth(colName, AggTypeFieldAggId, users, authRoles, env),
+		Auth:          es.NewCollectionBaseAuth(colName, AggTypeFieldAggId, usersColId, authRoles, env),
 		ColName:       colName,
 		AggregateType: aggType,
 	}

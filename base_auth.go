@@ -8,18 +8,18 @@ import (
 )
 
 func NewCollectionBaseAuth(
-	collectionName string, fieldKey string, users *Users, roles []string, env Env) *ColBaseAuth {
+	collectionName string, fieldKey string, usersColId string, roles []string, env Env) *ColBaseAuth {
 
 	return &ColBaseAuth{
 		ColBase:     &ColBase{Env: env},
 		AuthBuilder: NewAuthorizationBuilder(collectionName+"_auth", fieldKey, roles),
-		Users:       users,
+		UsersColId:  usersColId,
 	}
 }
 
 type ColBaseAuth struct {
 	*ColBase
-	Users       *Users
+	UsersColId  string
 	AuthBuilder *AuthorizationBuilder
 }
 
@@ -66,7 +66,7 @@ func (db *ColBaseAuth) CheckOrInit() (ret bool, err error) {
 					Name: db.AuthBuilder.AuthFieldFor(role),
 					Type: schema.FieldTypeRelation,
 					Options: &schema.RelationOptions{
-						CollectionId:  db.Users.Coll.Id,
+						CollectionId:  db.UsersColId,
 						CascadeDelete: false,
 					},
 				})
