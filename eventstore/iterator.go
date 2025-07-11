@@ -2,10 +2,10 @@ package eventstore
 
 import (
 	"github.com/hallgren/eventsourcing/core"
-	"github.com/pocketbase/pocketbase/models"
+	pbcore "github.com/pocketbase/pocketbase/core"
 )
 
-func NewIterator(aggregateType string, records []*models.Record) *Iterator {
+func NewIterator(aggregateType string, records []*pbcore.Record) *Iterator {
 	return &Iterator{
 		aggregateType: aggregateType,
 		records:       records,
@@ -15,7 +15,7 @@ func NewIterator(aggregateType string, records []*models.Record) *Iterator {
 
 type Iterator struct {
 	aggregateType string
-	records       []*models.Record
+	records       []*pbcore.Record
 	currentIndex  int
 	recordsCount  int
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	es "github.com/go-ee/eventsoutcing_pocketbase"
+	"github.com/go-ee/eventsoutcing_pocketbase/db"
 	"github.com/go-ee/eventsoutcing_pocketbase/eventstore"
 	"github.com/hallgren/eventsourcing/core"
 	"github.com/pocketbase/dbx"
@@ -20,7 +21,7 @@ const AggTypeFieldVersion = "version"
 const AggTypeFieldGlobalVersion = "global_version"
 const AggTypeFieldState = "state"
 
-func New(store *eventstore.StoreCollections) *StoreCollections {
+func New(store *eventstore.Store) *StoreCollections {
 	return &StoreCollections{
 		ColBase:    &es.ColBase{Env: store.Env},
 		EventStore: store,
@@ -31,10 +32,10 @@ func New(store *eventstore.StoreCollections) *StoreCollections {
 
 type StoreCollections struct {
 	*es.ColBase
-	EventStore *eventstore.StoreCollections
+	EventStore *eventstore.Store
 
 	aggTypeCols map[string]*SnapCol
-	auth        *es.AuthorizationBuilder
+	auth        *db.AuthorizationBuilder
 }
 
 func (o *StoreCollections) Get(
@@ -63,7 +64,7 @@ func (o *StoreCollections) Save(snapshot core.Snapshot) (err error) {
 func (o *StoreCollections) GetOrCreateForAggType(aggType string) (ret *SnapCol, err error) {
 	ret = o.aggTypeCols[aggType]
 	if ret == nil {
-		var eventStore *eventstore.AggCol
+		var eventStore *eventstore.Aggregate
 		if eventStore, err = o.EventStore.GetOrCreateForAggType(aggType); err != nil {
 			return
 		}
@@ -99,7 +100,7 @@ func NewRecord(snapshot *core.Snapshot, coll *models.Collection) (ret *models.Re
 	return
 }
 
-func NewSnapCol(aggregateType string, auth *es.AuthorizationBuilder, env es.Env) *SnapCol {
+func NewSnapCol(aggregateType string, auth *db.AuthorizationBuilder, env es.Env) *SnapCol {
 	collectionName := buildAggregateTypeCollectionName(aggregateType)
 	return &SnapCol{
 		ColBase:        &es.ColBase{Env: env},
@@ -111,7 +112,7 @@ func NewSnapCol(aggregateType string, auth *es.AuthorizationBuilder, env es.Env)
 
 type SnapCol struct {
 	*es.ColBase
-	auth           *es.AuthorizationBuilder
+	auth           *db.AuthorizationBuilder
 	CollectionName string
 	AggregateType  string
 }
@@ -121,9 +122,11 @@ func (o *SnapCol) CheckOrInit() (ret bool, err error) {
 		return
 	}
 
-	if o.Coll, err = o.Dao().FindCollectionByNameOrId(o.CollectionName); o.Coll == nil || o.IsRecreateDb() {
+	dao := o.App().Dao()
+
+	if o.Coll, err = dao.FindCollectionByNameOrId(o.CollectionName); o.Coll == nil || o.IsRecreateDb() {
 		if o.Coll != nil {
-			if err = o.Dao().DeleteCollection(o.Coll); err != nil {
+			if err = dao.DeleteCollection(o.Coll); err != nil {
 				return
 			}
 		}
@@ -165,7 +168,7 @@ func (o *SnapCol) CheckOrInit() (ret bool, err error) {
 			DeleteRule: types.Pointer(o.auth.DeleteRule()),
 		}
 
-		err = o.Dao().SaveCollection(o.Coll)
+		err = dao.SaveCollection(o.Coll)
 	}
 	return
 }
@@ -173,8 +176,11 @@ func (o *SnapCol) CheckOrInit() (ret bool, err error) {
 func (o *SnapCol) Get(
 	_ context.Context, aggId string, aggregateType string) (ret core.Snapshot, err error) {
 	fmt.Printf("aggregateType: %v, %v: %v", aggregateType, AggTypeFieldAggId, aggId)
+
+	dao := o.App().Dao()
+
 	var record *models.Record
-	if record, err = o.Dao().FindFirstRecordByFilter(o.Coll.Id,
+	if record, err = dao.FindFirstRecordByFilter(o.Coll.Id,
 		fmt.Sprintf("%v = {:%v}", AggTypeFieldAggId, AggTypeFieldAggId),
 		dbx.Params{AggTypeFieldAggId: aggId},
 	); err != nil {
@@ -195,7 +201,9 @@ func (o *SnapCol) Get(
 
 // Save persists events to the collections for aggregate type
 func (o *SnapCol) Save(snapshot core.Snapshot) (err error) {
-	err = o.Dao().RunInTransaction(func(txDao *daos.Dao) (txErr error) {
+	dao := o.App().Dao()
+
+	err = dao.RunInTransaction(func(txDao *daos.Dao) (txErr error) {
 		fmt.Printf("aggregateType: %v, %v: %v", snapshot.Type, AggTypeFieldAggId, snapshot.ID)
 		var record *models.Record
 		if record, txErr = txDao.FindFirstRecordByFilter(o.Coll.Id,
